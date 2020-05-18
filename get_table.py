@@ -12,19 +12,6 @@ import bs4 as bs
 import pandas as pd
 from urllib import request
 import time
-import sys
-import re
-
-AMOUNT_OF_TRIES = 30
-
-SLEEP_TIME = 25
-
-DATE = 1
-NONE_NUM_CHAR = "[^0-9]"
-COLUMNS = ['Country,Other', 'TotalCases', 'NewCases', 'TotalDeaths', 'NewDeaths',
-           'TotalRecovered', 'ActiveCases', 'Serious,Critical',
-           'Tot Cases/1M pop', 'Deaths/1M pop', 'TotalTests',
-           'Tests/1M pop']
 
 
 def get_web(url):
@@ -41,6 +28,7 @@ def get_web(url):
         if i > AMOUNT_OF_TRIES:
             return None
     return web
+
 
 def get_site_html(url):
     try:
@@ -72,43 +60,54 @@ def get_site_html(url):
         return False
     return bs.BeautifulSoup(url_string, "html.parser")
 
-def get_table(web) -> pd.DataFrame:
+
+def get_table_columns(table_first_row):
+    row_info = table_first_row.find_all('td')
+    row_data = [i.text.replace("\n", "") for i in row_info[0:len(row_info)]]
+    return row_data
+
+
+def get_tables(web) -> list:
     """
     Parse the html into a dataframe
     """
-    table = web.find_all('table')[-1]
+    table = web.find_all('table')
+    table_list = []
+    for table in table:
+        df = get_table(table)
+        if df is not None:
+            table_list.append(df)
+    return table_list
+
+
+def get_table(table):
     table = table.find_all_next("tr")
-    df = pd.DataFrame(columns=COLUMNS)
-    for i in range(1, len(table[1:])):
-        row_info = table[i].find_all('td')
-        country = row_info[0].text.replace('\n', '')
-        row_data = [re.sub(NONE_NUM_CHAR, '', i.text) for i in row_info[1:min(len(COLUMNS), len(row_info))]]
-        if len(row_info) < len(COLUMNS):
-            row_info = [country] + row_data + [-1] * (len(COLUMNS) - len(row_info))
-        else:
-            row_info = [country] + row_data
-        row = pd.Series(data=row_info, index=COLUMNS)
-        df.loc[i - 1] = row
+    columns = get_table_columns(table[0])
+    df = pd.DataFrame(columns=columns)
+    for row in table[1:]:
+        row_data = get_table_columns(row)
+        if len(row_data) != len(columns):
+            return None
+        row_data = pd.Series(data=row_data, index=columns)
+
+        df = df.append(row_data, ignore_index=True)
     return df
 
 
+def process_table(table: pd.DataFrame):
+    for col in table.columns:
+        try:
+            table[col] = table[col].str.replace(",", "").astype(float)
 
-def process_table(table):
-    table.drop(table[table['Country,Other'] == 'Country,Other'].index, inplace=True)
-    table.reset_index(drop=True)
-    for col in table.columns[1:]:
-        if table[col].dtype != object:
+        except ValueError:
             continue
-        table[col] = table[col].replace('', -1).astype(float)
+    return table
 
 
 
-if __name__ == '__main__':
-    for i in sys.argv[DATE:]:
-        print(i)
-        url = "https://web.archive.org/web/2020%s/https://www.worldometers.info/coronavirus/" % i
-
-        web = get_web(url)
-        info = get_table(web)
-        df = info.table
-        df.to_csv(i + ".csv")
+def generate_tables_csv(url,title):
+    web = get_web(url)
+    tabel_list = get_tables(web)
+    tabel_list = [process_table(i) for i in tabel_list]
+    for idx in range(len(tabel_list)):
+        tabel_list[idx].to_csv(title + "_" + str(idx) + ".csv")
